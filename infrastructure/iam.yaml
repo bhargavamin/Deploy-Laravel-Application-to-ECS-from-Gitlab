@@ -1,0 +1,87 @@
+---
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+
+Description: CI/CD IAM user
+
+
+Resources:
+  # IAM user used for Gitlab CI/CD pipeline
+  IamUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName:
+        Fn::Sub: ${AWS::StackName}-user
+      Policies:
+      - PolicyName: CodeDeploymentBucketPolicy
+        PolicyDocument:
+          Statement:
+          - Action:
+            - codedeploy:Batch*
+            - codedeploy:CreateDeployment
+            - codedeploy:Get*
+            - codedeploy:List*
+            - codedeploy:RegisterApplicationRevision
+            Effect: Allow
+            Resource: '*'
+            Sid: AllowCodeDeploy
+          - Action:
+            - s3:ListAllMyBuckets
+            Effect: Allow
+            Resource: arn:aws:s3:::*
+            Sid: AllowListingOfBuckets
+          - Action:
+            - s3:PutObject
+            Effect: Allow
+            Resource:
+              Fn::Sub: arn:aws:s3:::${CodeDeploymentBucketService}/*
+            Sid: AllowPutObject
+      - PolicyName: UpdateEcsServicePolicy
+        PolicyDocument:
+          Statement:
+          - Action:
+            - ecs:List*
+            - ecs:Get*
+            - ecs:Describe*
+            - ecs:UpdateService
+            - ecs:UpdateServicePrimaryTaskSet
+            - ecs:UpdateTaskSet
+            Effect: Allow
+            Resource: '*'
+      - PolicyName: UpdateEcrServicePolicy
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Action:
+            - ecr:Put*
+            - ecr:Describe*
+            - ecr:Start*
+            - ecr:Get*
+            - ecr:List*
+            - ecr:UploadLayerPart
+            - ecr:Batch*
+            - ecr:CompleteLayerUpload
+            - ecr:InitiateLayerUpload
+            Effect: Allow
+            Resource: '*'
+
+  IamUserAccessKey:
+    DependsOn: IamUser
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName:
+        Ref: IamUser
+
+  IamUserAccesKeySecret:
+    DependsOn: IamUserAccessKey
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-IamUserAccesKeySecret
+      SecretString:
+        Fn::GetAtt:
+        - IamUserAccessKey
+        - SecretAccessKey
+
+...

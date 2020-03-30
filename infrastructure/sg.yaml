@@ -1,0 +1,63 @@
+---
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+
+Description: SecurityGroups
+
+
+Outputs:
+  AutoScalingGroupSecurityGroupId:
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-AutoScalingGroupSecurityGroupId
+    Value:
+      Fn::GetAtt:
+      - AutoScalingGroupSecurityGroup
+      - GroupId
+  LoadBalancerSecurityGroupId:
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-LoadBalancerSecurityGroupId
+    Value:
+      Fn::GetAtt:
+      - LoadBalancerSecurityGroup
+      - GroupId
+
+Resources:
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the internal load balancer
+      SecurityGroupIngress:
+      - Description: Account VPC Cidr
+        IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: "0.0.0.0/0"
+
+  AutoScalingGroupSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ASG for ECS cluster
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        SourceSecurityGroupId:
+          Ref: LoadBalancerSecurityGroup
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        SourceSecurityGroupId:
+          Ref: LoadBalancerSecurityGroup
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}-AutoScalingGroupSecurityGroup
+      - Key: generated-by
+        Value: cloudformation
+      VpcId:
+        Fn::ImportValue: base-vpc-VPC
+
+...

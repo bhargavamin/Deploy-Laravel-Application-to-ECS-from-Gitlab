@@ -1,0 +1,305 @@
+---
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+
+Description: SecurityGroups
+
+
+Outputs:
+  EcsCluster:
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-EcsCluster
+    Value:
+      Ref: EcsCluster
+
+  EcsClusterLoadBalancer:
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-EcsClusterLoadBalancer
+    Value:
+      Ref: LoadBalancerService
+
+  EcsClusterListenerArn:
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-EcsClusterListenerArn
+    Value:
+      Ref: LoadBalancerListenerPlain
+
+  EcsServiceAutoScalingRoleArn:
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-EcsServiceAutoScalingRoleArn
+    Value:
+      Fn::GetAtt:
+      - EcsServiceAutoScalingRole
+      - Arn
+
+Resources:
+  LoadBalancerListenerPlain:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: LoadBalancerTargetGroup
+      LoadBalancerArn:
+        Ref: LoadBalancerService
+      Port: 80
+      Protocol: HTTP
+
+  LoadBalancerService:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}
+      LoadBalancerAttributes:
+      - Key: idle_timeout.timeout_seconds
+        Value: 300
+      Scheme: internal
+      SecurityGroups:
+      - Fn::ImportValue: ecs-sg-LoadBalancerSecurityGroupId
+      Subnets:
+      - << subnet-id 1 >>
+      - << subnet-id 2 >>
+      - << subnet-id 3 >>
+      Tags:
+      - Key: generated-by
+        Value: cloudformation
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}
+
+  LoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /
+      HealthCheckPort: traffic-port
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2  # max 10
+      Name:
+        Fn::Sub: ${AWS::StackName}
+      Port: 80
+      Protocol: HTTP
+      Tags:
+      - Key: generated-by
+        Value: cloudformation
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}
+      UnhealthyThresholdCount: 3  # max 10
+      VpcId: << VPC ID >>
+
+  AutoScalingInstanceProfile:
+    DependsOn: AutoScalingInstanceRole
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+      - Ref: AutoScalingInstanceRole
+
+  AutoScalingInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+      - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+      - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+      - PolicyName: ecs-permissions
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Action:
+            - ecs:CreateCluster
+            - ecs:DeregisterContainerInstance
+            - ecs:DiscoverPollEndpoint
+            - ecs:Poll
+            - ecs:RegisterContainerInstance
+            - ecs:StartTelemetrySession
+            - ecs:Submit*
+            Effect: Allow
+            Resource: '*'
+      - PolicyName: ecr-permissions
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Action:
+            - ecr:BatchCheckLayerAvailability
+            - ecr:BatchGetImage
+            - ecr:DescribeImages
+            - ecr:DescribeImageScanFindings
+            - ecr:DescribeRepositories
+            - ecr:GetAuthorizationToken
+            - ecr:GetDownloadUrlForLayer
+            - ecr:GetLifecyclePolicy
+            - ecr:GetLifecyclePolicyPreview
+            - ecr:GetRepositoryPolicy
+            - ecr:ListImages
+            - ecr:ListTagsForResource
+            Effect: Allow
+            Resource: '*'
+      - PolicyName: ec2-autoscaling-permissions
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Action:
+            - autoscaling:SetInstanceProtection
+            - ec2:DescribeInstances
+            - ec2:TerminateInstances
+            Effect: Allow
+            Resource: '*'
+
+  AutoScalingGroup:
+    DependsOn: AutoScalingLaunchTemplate
+    Type: AWS::AutoScaling::AutoScalingGroup
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT15M
+        SuspendProcesses:
+          - HealthCheck
+          - ReplaceUnhealthy
+          - AZRebalance
+          - AlarmNotification
+          - ScheduledActions
+        WaitOnResourceSignals: true
+    Properties:
+      HealthCheckGracePeriod: 60
+      HealthCheckType: EC2
+      TerminationPolicies:
+      - default
+      MaxSize: 5
+      MinSize: 0
+      MixedInstancesPolicy:
+        InstancesDistribution:
+          OnDemandAllocationStrategy: prioritized
+          OnDemandBaseCapacity: 0
+          OnDemandPercentageAboveBaseCapacity: 0
+          SpotAllocationStrategy: lowest-price
+          SpotInstancePools: 8
+        LaunchTemplate:
+            LaunchTemplateSpecification:
+              LaunchTemplateId:
+                Ref: AutoScalingLaunchTemplate
+              Version:
+                Fn::GetAtt:
+                - AutoScalingLaunchTemplate
+                - LatestVersionNumber
+            Overrides:
+            - InstanceType: r3.xlarge
+            - InstanceType: m3.xlarge
+            - InstanceType: c3.xlarge
+            - InstanceType: c4.xlarge
+            - InstanceType: t3a.xlarge
+            - InstanceType: t3.xlarge
+            - InstanceType: t2.xlarge
+            - InstanceType: c5.xlarge
+      Tags:
+      - Key: Ephemeral
+        PropagateAtLaunch: true
+        Value: true
+      - Key: generated-by
+        PropagateAtLaunch: true
+        Value: cloudformation
+      - Key: Name
+        PropagateAtLaunch: true
+        Value: ecs-container-node
+      VPCZoneIdentifier:
+      - << subnet-id 1 >>
+      - << subnet-id 2 >>
+      - << subnet-id 3 >>
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MaxBatchSize: 1
+        MinInstancesInService: 1
+        PauseTime: PT2M
+
+  AutoScalingLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    DependsOn: AutoScalingInstanceProfile
+    Description: LaunchTemplate for Worker ASG
+    Properties:
+      LaunchTemplateData:
+        BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp2
+        IamInstanceProfile:
+          Name:
+            Ref: AutoScalingInstanceProfile
+        ImageId: ami-09270d80acf4d09ca  # amzn2-ami-ecs-hvm-2.0.20200205-x86_64-ebs
+        InstanceInitiatedShutdownBehavior: terminate
+        SecurityGroupIds:
+        - Fn::ImportValue: ecs-sg-AutoScalingGroupSecurityGroupId
+        UserData:
+          Fn::Base64:
+            Fn::Sub: |
+              #!/bin/bash
+              set -euxo pipefail
+
+              yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+
+              echo ECS_CLUSTER=${EcsCluster} >> /etc/ecs/ecs.config
+              yum install -y aws-cfn-bootstrap
+              /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
+
+      LaunchTemplateName:
+        Fn::Sub: ${AWS::StackName}-launch-template
+
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties: 
+      ClusterName:
+        Fn::Sub: ${AWS::StackName}
+      ClusterSettings: 
+      - Name: containerInsights
+        Value: enabled
+      Tags: 
+      - Key: generated-by
+        Value: cloudformation
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}-cluster
+
+  EcsServiceAutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: application-autoscaling.amazonaws.com
+      Path: /
+      Policies:
+      - PolicyName: ecs-service-autoscaling
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - application-autoscaling:*
+            - cloudwatch:DescribeAlarms
+            - cloudwatch:PutMetricAlarm
+            - ecs:DescribeServices
+            - ecs:UpdateService
+            Resource: '*'
+...

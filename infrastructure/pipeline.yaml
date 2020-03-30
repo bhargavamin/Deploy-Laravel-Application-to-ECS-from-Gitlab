@@ -1,0 +1,209 @@
+---
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+
+Description: CodePipeline
+
+
+Resources:
+  CloudFormationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: cloudformation.amazonaws.com
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AdministratorAccess
+
+  CodePipelineBucketService:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      AccessControl: BucketOwnerFullControl
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-${AWS::Region}-cloudformation
+      Tags:
+      - Key: generated-by
+        Value: cloudformation
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}-codepipeline-bucket
+      - Key: system
+        Value: ecs
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: codepipeline.amazonaws.com
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AdministratorAccess
+      Path: /
+
+  CodePipelineService:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name:
+        Ref: AWS::StackName
+      ArtifactStore:
+        Location:
+          Ref: CodePipelineBucketService
+        Type: S3
+      RoleArn:
+        Fn::GetAtt:
+        - CodePipelineRole
+        - Arn
+      Stages:
+      - Name: Source-Stage
+        Actions:
+        - Name: Source-Action
+          ActionTypeId:
+            Category: Source
+            Owner: ThirdParty
+            Provider: GitHub
+            Version: 1
+          Configuration:
+            Branch: master
+            OAuthToken: '{{resolve:secretsmanager:github/oauth-token}}'
+            Owner: << --- REPO OWNER --- >> 
+            Repo: << --- REPO NAME --- >>
+          InputArtifacts: []
+          OutputArtifacts:
+          - Name: SourceOutput
+          RunOrder: 1
+
+      - Name: Pipeline-Stage
+        Actions:
+        - Name: Pipeline-Action
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Provider: CloudFormation
+            Version: 1
+          Configuration:
+            ActionMode: CREATE_UPDATE
+            Capabilities: CAPABILITY_IAM,CAPABILITY_NAMED_IAM
+            RoleArn:
+              Fn::GetAtt:
+              - CloudFormationRole
+              - Arn
+            StackName:
+              Ref: AWS::StackName
+            TemplatePath: SourceOutput::cloud-formation/ecs-stacks/pipeline.yaml
+          InputArtifacts:
+          - Name: SourceOutput
+          RunOrder: 1
+
+      - Name: SecurityGroups-Stage
+        Actions:
+        - Name: SecurityGroups-Action
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Provider: CloudFormation
+            Version: 1
+          Configuration:
+            ActionMode: CREATE_UPDATE
+            RoleArn:
+              Fn::GetAtt:
+              - CloudFormationRole
+              - Arn
+            StackName: ecs-sg
+            TemplatePath: SourceOutput::infrastructure/sg.yaml
+          InputArtifacts:
+          - Name: SourceOutput
+          RunOrder: 1
+
+        - Name: IamUsers-Action
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Provider: CloudFormation
+            Version: 1
+          Configuration:
+            ActionMode: CREATE_UPDATE
+            RoleArn:
+              Fn::GetAtt:
+              - CloudFormationRole
+              - Arn
+            StackName: ecs-iam
+            TemplatePath: SourceOutput::infrastructure/iam.yaml
+          InputArtifacts:
+          - Name: SourceOutput
+          RunOrder: 1
+
+      - Name: Ecr-Stage
+        Actions:
+        - Name: Ecr-Action
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Provider: CloudFormation
+            Version: 1
+          Configuration:
+            ActionMode: CREATE_UPDATE
+            Capabilities: CAPABILITY_IAM
+            RoleArn:
+              Fn::GetAtt:
+              - CloudFormationRole
+              - Arn
+            StackName: ecr
+            TemplatePath: SourceOutput::infrastructure/ecr.yaml
+          InputArtifacts:
+          - Name: SourceOutput
+          RunOrder: 1
+
+
+      - Name: Cluster-Stage
+        Actions:
+        - Name: Cluster-Action
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Provider: CloudFormation
+            Version: 1
+          Configuration:
+            ActionMode: CREATE_UPDATE
+            Capabilities: CAPABILITY_IAM
+            RoleArn:
+              Fn::GetAtt:
+              - CloudFormationRole
+              - Arn
+            StackName: ecs-cluster
+            TemplatePath: SourceOutput::infrastructure/ecs-cluster.yaml
+          InputArtifacts:
+          - Name: SourceOutput
+          RunOrder: 1
+
+      - Name: Service-Stage
+        Actions:
+        - Name: Service-Action
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Provider: CloudFormation
+            Version: 1
+          Configuration:
+            ActionMode: CREATE_UPDATE
+            Capabilities: CAPABILITY_IAM
+            RoleArn:
+              Fn::GetAtt:
+              - CloudFormationRole
+              - Arn
+            StackName: ecs-service
+            TemplatePath: SourceOutput::infrastructure/ecs-service.yaml
+          InputArtifacts:
+          - Name: SourceOutput
+          RunOrder: 1
+
+...
