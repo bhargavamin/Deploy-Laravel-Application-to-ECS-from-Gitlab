@@ -1,0 +1,77 @@
+stages:
+  - build
+  - test
+  - prepare
+  - deploy
+
+variables:
+  DOCKER_TLS_CERTDIR: ""
+
+# define cache to speed up build job
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - ./laravel-app/
+
+build-and-test:
+  stage: build
+  image: composer:1.8
+  before_script:
+    - cd ./laravel-app
+  script:
+    - composer install
+    - cp .env.example .env
+    - php artisan key:generate
+    - php ./vendor/bin/phpunit
+  tags:
+    - aboutyou
+
+deploy-to-ecr:
+  stage: prepare
+  image: docker:stable
+  dependencies:
+    - build-and-test
+  services:
+    - docker:dind
+  variables:
+    AWS_ECR_REPOSITORY_URL: ''
+  before_script:
+    # Install AWS cli and login to ECR repo
+    - apk add --no-cache curl jq python py-pip
+    - pip install awscli
+    - $(aws ecr get-login --no-include-email --region $AWS_DEFAULT_REGION)
+    - IMAGE_TAG="$(echo $CI_COMMIT_SHA | head -c 8)"
+  script:
+    # Build Docker image and push it to ECR
+    - docker build -t ${REPOSITORY_URL}:latest .
+    - echo "Tagging image..."
+    - echo ${REPOSITORY_URL}
+    - docker tag ${REPOSITORY_URL}:latest ${REPOSITORY_URL}:${IMAGE_TAG}
+    - echo "Pushing image..."
+    - docker push ${REPOSITORY_URL}:latest
+    - docker push ${REPOSITORY_URL}:${IMAGE_TAG}
+    - echo ${IMAGE_TAG}
+    - echo export ECR_DOCKER_IMAGE_TAG="${IMAGE_TAG}" > variables.env
+  tags:
+   - aboutyou
+
+deploy-to-ecs:
+  stage: deploy
+  image: docker:stable
+  dependencies:
+    - deploy-to-ecr
+  services:
+    - docker:dind
+  variables:
+    AWS_ECS_CLUSTER_NAME: "test-ecs-cluster"
+    AWS_ECS_SERVICE_NAME: "test-ecs-service"
+  before_script:
+    - apk add --no-cache curl jq python3 py-pip
+    - pip3 install awscli boto3
+    - IMAGE_TAG="$(echo $CI_COMMIT_SHA | head -c 8)"
+  script:
+    - echo ${IMAGE_TAG}
+    - aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --force
+    - python3 .gitlab-ci/post-deploy.py --ecs_cluster $AWS_ECS_CLUSTER_NAME --ecs_service $AWS_ECS_SERVICE_NAME --maxtimeout 420
+  tags:
+    - aboutyou

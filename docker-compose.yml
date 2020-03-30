@@ -1,0 +1,9 @@
+# Docker compose file to build locally
+version: '3.4'
+services:
+  laravel-app:
+    build: .
+    ports:
+      - "80:80"
+    volumes:
+      - ./laravel-app/:/var/www/html/
